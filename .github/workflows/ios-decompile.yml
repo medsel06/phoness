@@ -23,12 +23,12 @@ jobs:
     steps:
       - name: ipsw kur
         run: |
-          brew install blacktop/tap/ipsw
+          brew install ipsw || brew install blacktop/tap/ipsw
           ipsw version
       - name: Firmware indir + shared cache ayikla
         run: |
           set -x
-          ipsw download ipsw --device "${{ inputs.cihaz }}" --version "${{ inputs.surum }}" --dyld --confirm
+          ipsw download ipsw --device "${{ inputs.cihaz || 'iPhone17,5' }}" --version "${{ inputs.surum || '27.0' }}" --dyld --confirm
           echo "=== inen dosyalar ==="
           ls -la
           find . -maxdepth 3 -iname "dyld_shared_cache*" | tee caches.txt
@@ -39,11 +39,11 @@ jobs:
           [ -z "$CACHE" ] && CACHE=$(find . -iname "dyld_shared_cache_arm64*" | grep -v '\.' | head -1)
           echo "cache: $CACHE"
           mkdir -p out
-          ipsw dyld extract "$CACHE" "${{ inputs.cerceve }}" --output out || \
-          ipsw dyld extract "$CACHE" "/System/Library/PrivateFrameworks/${{ inputs.cerceve }}.framework/${{ inputs.cerceve }}" --output out
+          ipsw dyld extract "$CACHE" "${{ inputs.cerceve || 'GenerativeAgents' }}" --output out || \
+          ipsw dyld extract "$CACHE" "/System/Library/PrivateFrameworks/${{ inputs.cerceve || 'GenerativeAgents' }}.framework/${{ inputs.cerceve }}" --output out
           echo "=== cikan ==="
           find out -type f | tee extracted.txt
-          DYLIB=$(find out -type f -name "${{ inputs.cerceve }}" | head -1)
+          DYLIB=$(find out -type f -name "${{ inputs.cerceve || 'GenerativeAgents' }}" | head -1)
           echo "DYLIB=$DYLIB" >> $GITHUB_ENV
       - name: Macho bilgi + semboller + sinif dokumu
         run: |
