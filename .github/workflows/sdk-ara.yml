@@ -1,0 +1,41 @@
+name: sdk-ara
+# iOS 27 SDK'sinda MCP (Model Context Protocol) izi var mi? Salt okuma, derleme yok.
+on:
+  push:
+    paths:
+      - ".github/workflows/sdk-ara.yml"
+jobs:
+  ara:
+    strategy:
+      fail-fast: false
+      matrix:
+        makine: [macos-26, macos-15]
+    runs-on: ${{ matrix.makine }}
+    timeout-minutes: 30
+    steps:
+      - name: Xcode listesi ve secim (en yeni)
+        run: |
+          ls -d /Applications/Xcode*.app || true
+          X=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          [ -z "$X" ] && X=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "secilen: $X"
+          sudo xcode-select -s "$X/Contents/Developer"
+          xcodebuild -version
+          echo "iphoneos SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+      - name: SDK'da MCP ara
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "== SDK: $SDK"
+          echo "== Cerceve adlari (mcp/model/intent/agent/siri/intelligence)"
+          ls "$SDK/System/Library/Frameworks" "$SDK/System/Library/PrivateFrameworks" 2>/dev/null | grep -i -E "mcp|modelcontext|intent|agent|siri|intelligence|foundationmodel" || true
+          echo "== MCP/ModelContextProtocol gecen dosyalar (swiftinterface/h/tbd/json)"
+          grep -rl -E "ModelContextProtocol|MCPServer|MCPTool|MCPClient|_MCP|MCP[A-Z][a-z]" "$SDK" --include=*.swiftinterface --include=*.h --include=*.tbd --include=*.json --include=*.apinotes 2>/dev/null | head -60 || true
+          echo "== Sembol/ad sayimi"
+          grep -rho -E "[A-Za-z_0-9]*(ModelContextProtocol|MCPServer|MCPTool|MCPClient|MCP[A-Z][A-Za-z]+)[A-Za-z_0-9]*" "$SDK" --include=*.swiftinterface --include=*.h --include=*.tbd 2>/dev/null | sort | uniq -c | sort -rn | head -120 || true
+          echo "== AppIntents.framework icinde 'mcp' (buyuk-kucuk harf duyarsiz) satirlar"
+          grep -rhi -E "\bmcp\b|model ?context ?protocol" "$SDK/System/Library/Frameworks/AppIntents.framework" 2>/dev/null | head -60 || true
+      - name: Xcode uygulamasinda MCP (kodlama ajani)
+        run: |
+          X=$(xcode-select -p)/..
+          ls "$X/SharedFrameworks" "$X/Frameworks" 2>/dev/null | grep -i -E "mcp|agent|intelligence" || true
+          grep -rl -i "modelcontextprotocol" "$X/SharedFrameworks" --include=*.plist 2>/dev/null | head -20 || true
