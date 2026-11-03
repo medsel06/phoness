@@ -241,7 +241,7 @@ final class Agent {
             MainActor.assumeIsolated { Agent.shared.endShort() }
         }
 
-        let id = "\(Bundle.main.bundleIdentifier ?? "com.jxherc.agent").run.\(run.uuidString.prefix(8))"
+        let id = "\(AppID.bgPrefix)\(run.uuidString.prefix(8))"
         BGTaskScheduler.shared.register(forTaskWithIdentifier: id, using: .main) { task in
             guard let task = task as? BGContinuedProcessingTask else { return }
             MainActor.assumeIsolated {
