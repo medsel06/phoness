@@ -45,25 +45,27 @@ jobs:
           find out -type f | tee extracted.txt
           DYLIB=$(find out -type f -name "${{ inputs.cerceve || 'GenerativeAgents' }}" | head -1)
           echo "DYLIB=$DYLIB" >> $GITHUB_ENV
-      - name: Macho bilgi + semboller + sinif dokumu
+          echo "CACHE=$CACHE" >> $GITHUB_ENV
+      - name: Macho bilgi + cache class-dump + stringler
         run: |
           set -x
-          D="$DYLIB"
+          D="$DYLIB"; C="$CACHE"
           echo "### macho info" > analiz.txt
-          ipsw macho info "$D" 2>&1 | head -120 >> analiz.txt || true
-          echo "### mangled swift semboller (demangle)" >> analiz.txt
-          nm -gU "$D" 2>/dev/null | awk '{print $NF}' | grep '^_\$s' | head -4000 > mangled.txt || true
-          xcrun swift-demangle < mangled.txt 2>/dev/null | sort -u > demangled.txt || true
-          wc -l mangled.txt demangled.txt >> analiz.txt
-          echo "### MCP/tool/register/entitlement iceren cozulmus semboller" >> analiz.txt
-          grep -iE "mcp|tool|register|entitlement|transport|stdio|subprocess|session|loopagent|sequential|xpc" demangled.txt | head -400 >> analiz.txt
-          echo "### class-dump (swift+objc)" >> analiz.txt
-          ipsw class-dump "$D" 2>/dev/null > classdump.txt || ipsw macho info "$D" --objc 2>/dev/null > classdump.txt || true
-          wc -l classdump.txt >> analiz.txt
-          echo "### classdump MCP/tool satirlari" >> analiz.txt
-          grep -inE "mcp|registertool|listtools|calltool|\btool\b|transport|entitlement" classdump.txt | head -300 >> analiz.txt
-          echo "### cstring'lerde MCP/protokol izleri" >> analiz.txt
-          strings -a "$D" | grep -iE "tools/call|tools/list|jsonrpc|mcp|modelcontext|2025-[0-9]{2}-[0-9]{2}|com.apple.private" | sort -u | head -200 >> analiz.txt
+          ipsw macho info "$D" 2>&1 | head -60 >> analiz.txt || true
+          # class-dump DOGRUDAN shared cache'ten (tipler cozulur)
+          ipsw class-dump "$C" GenerativeAgents 2>/dev/null > classdump.txt ||           ipsw dyld class-dump "$C" GenerativeAgents 2>/dev/null > classdump.txt ||           ipsw class-dump --cache "$C" "$D" 2>/dev/null > classdump.txt || true
+          echo "### classdump satir sayisi" >> analiz.txt; wc -l classdump.txt >> analiz.txt
+          echo "### classdump MCP/tool/config/server bolumleri" >> analiz.txt
+          grep -inE "mcp|tool|mcpservers|serverconfig|transport|jsonrpc|register|entitlement" classdump.txt | head -400 >> analiz.txt
+          # TUM stringler + yapilandirma/dosya yolu ipuclari
+          strings -a "$D" > tum_stringler.txt || true
+          echo "### mcpServers / config / plist / path baglami" >> analiz.txt
+          grep -inE "mcpservers|mcp.?server.?config|\.plist|\.json|/Library/|/var/|/private/|preferences|defaults|UserDefaults|configuration|config file|load.*config" tum_stringler.txt | head -200 >> analiz.txt
+          echo "### MCP ile ilgili tum stringler" >> analiz.txt
+          grep -iE "mcp|modelcontext|jsonrpc|tools/(call|list)|resources/|prompts/" tum_stringler.txt | sort -u | head -200 >> analiz.txt
+          # cache'ten GenerativeAgents export sembolleri + demangle
+          ipsw dyld symaddr "$C" --image GenerativeAgents 2>/dev/null | head -50 >> analiz.txt || true
+          ipsw dyld a2s "$C" 2>/dev/null | head -1 >/dev/null || true
       - name: Sonuclari yukle
         uses: actions/upload-artifact@v4
         with:
@@ -73,4 +75,5 @@ jobs:
             demangled.txt
             classdump.txt
             extracted.txt
+            tum_stringler.txt
           if-no-files-found: warn
