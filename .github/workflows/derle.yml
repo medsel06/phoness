@@ -6,13 +6,17 @@ name: derle
 
 on:
   workflow_dispatch:
+    inputs:
+      makine:
+        description: "runner etiketi (macos-26, macos-15-intel, macos-15)"
+        default: macos-26
   push:
     paths:
       - ".github/workflows/derle.yml"
 
 jobs:
   ios:
-    runs-on: macos-26
+    runs-on: ${{ inputs.makine || 'macos-26' }}
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
