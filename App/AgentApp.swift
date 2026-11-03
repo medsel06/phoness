@@ -4,7 +4,7 @@ import SwiftUI
 struct AgentApp: App {
     var body: some Scene {
         WindowGroup {
-            ChatView()
+            BridgeView()
                 .preferredColorScheme(.dark)
         }
     }
