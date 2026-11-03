@@ -47,7 +47,8 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        UIBackgroundModes: [processing]
+        # audio: köprü açıkken sessiz ses çalıp arka planda uyanık kalmak için (BridgeKeeper)
+        UIBackgroundModes: [processing, audio]
         BGTaskSchedulerPermittedIdentifiers: [$(PRODUCT_BUNDLE_IDENTIFIER).run.*]
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

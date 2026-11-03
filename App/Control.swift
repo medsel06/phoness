@@ -242,6 +242,21 @@ final class Control {
         message = ""
     }
 
+    // kapanmış ya da donmuş Runner'ı kapatıp yeniden açar (Turn Off + Turn On, VPN'e dokunmadan).
+    // köprü bekçisi kullanır. Runner açılınca true
+    func restart() async -> Bool {
+        job?.cancel()
+        job = nil
+        jobID = nil
+        _ = try? await Runner.call("/stop", body: [:], timeout: 2)
+        #if !targetEnvironment(simulator)
+        launcher_stop()
+        #endif
+        phase = .off
+        start()
+        return await ensureOn()
+    }
+
     func loadApps() async {
         var list: [[String: String]] = []
         #if !targetEnvironment(simulator)

@@ -1,9 +1,17 @@
 import Foundation
 
+// VPS köprüsü, Runner'ın içinde. Kullanıcı durdurana kadar çalışır (süre sınırı yok).
+// VPS'ten iş alır (uzun bekleme), işi Runner'ın kendi uç noktalarıyla (look/act/apps) yapar,
+// cevabı olduğu gibi geri yollar. Telefona dışarıdan bağlantı açılmaz.
 @MainActor
 final class StatusBridge {
     private(set) var state = "stopped"
     private var task: Task<Void, Never>?
+    private unowned let phone: Phone
+
+    init(phone: Phone) {
+        self.phone = phone
+    }
 
     private static let session = URLSession(
         configuration: .ephemeral, delegate: NoRedirect(), delegateQueue: nil
@@ -19,14 +27,15 @@ final class StatusBridge {
         }
         guard task == nil else { return true }
         state = "connecting"
-        let clock = ContinuousClock()
-        let deadline = clock.now + .seconds(900)
         task = Task {
-            while !Task.isCancelled && clock.now < deadline {
+            // ilk istek beklemeden döner, "bağlı" hemen görünsün. sonrakiler iş gelene kadar bekler
+            var wait = false
+            while !Task.isCancelled {
                 do {
-                    try await poll(base: base, key: key)
+                    try await poll(base: base, key: key, wait: wait)
                     try Task.checkCancellation()
                     state = "connected"
+                    wait = true
                 } catch BridgeError.unauthorized {
                     guard !Task.isCancelled else { return }
                     state = "unauthorized"
@@ -35,12 +44,10 @@ final class StatusBridge {
                 } catch {
                     guard !Task.isCancelled else { return }
                     state = "retrying"
+                    wait = false
+                    try? await Task.sleep(for: .seconds(3))
                 }
-                try? await Task.sleep(for: .seconds(2))
             }
-            guard !Task.isCancelled else { return }
-            state = "expired"
-            task = nil
         }
         return true
     }
@@ -51,36 +58,65 @@ final class StatusBridge {
         state = "stopped"
     }
 
-    private struct Job: Decodable {
-        let id: String
-        let komut: String
-    }
-
     private enum BridgeError: Error {
         case unauthorized, invalidResponse
     }
 
-    private func poll(base: URL, key: String) async throws {
+    private func poll(base: URL, key: String, wait: Bool) async throws {
         let device = base.appending(path: "cihaz")
-        let (data, status) = try await request(device.appending(path: "al"), key: key)
+        var take = device.appending(path: "al")
+        if wait { take.append(queryItems: [URLQueryItem(name: "bekle", value: "1")]) }
+        // sunucu en fazla 15 sn bekletir
+        let (data, status) = try await request(take, key: key, timeout: wait ? 30 : 10)
         if status == 204 { return }
-        guard status == 200, data.count <= 1024 else { throw BridgeError.invalidResponse }
-        let job = try JSONDecoder().decode(Job.self, from: data)
-        guard job.komut == "durum",
-              job.id.range(of: #"^[a-f0-9]{32}$"#, options: .regularExpression) != nil else {
+        guard status == 200, data.count <= 16 * 1024,
+              let job = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let id = job["id"] as? String,
+              id.range(of: #"^[a-f0-9]{32}$"#, options: .regularExpression) != nil,
+              let komut = job["komut"] as? String else {
             throw BridgeError.invalidResponse
         }
         try Task.checkCancellation()
-        let result = device.appending(path: "sonuc").appending(path: job.id).appending(path: "acik")
-        let (_, resultStatus) = try await request(result, key: key, method: "POST")
-        guard resultStatus == 204 || resultStatus == 409 else { throw BridgeError.invalidResponse }
+        let res = run(komut, job["veri"] as? [String: Any] ?? [:])
+        let status3 = (100...599).contains(res.status) ? res.status : 500
+        let answer = device.appending(path: "cevap").appending(path: id).appending(path: String(status3))
+        let (_, answerStatus) = try await request(answer, key: key, method: "POST", body: res.body, timeout: 30)
+        guard answerStatus == 204 || answerStatus == 409 else { throw BridgeError.invalidResponse }
     }
 
-    private func request(_ url: URL, key: String, method: String = "GET") async throws -> (Data, Int) {
+    // VPS'in komutunu Runner'ın yerel uç noktasına çevirir. yalnız bu dört komut var
+    private func run(_ komut: String, _ veri: [String: Any]) -> Server.Response {
+        var req = Server.Request()
+        switch komut {
+        case "durum":
+            return .json(["ok": true])
+        case "bak":
+            req.method = "GET"
+            req.path = "/look"
+        case "islem":
+            req.method = "POST"
+            req.path = "/act"
+            req.body = (try? JSONSerialization.data(withJSONObject: veri)) ?? Data("{}".utf8)
+        case "uygulamalar":
+            req.method = "GET"
+            req.path = "/apps"
+        default:
+            return .json(["error": "unknown bridge command \(komut)"], status: 400)
+        }
+        return phone.handle(req)
+    }
+
+    private func request(
+        _ url: URL, key: String, method: String = "GET", body: Data? = nil, timeout: Double
+    ) async throws -> (Data, Int) {
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.timeoutInterval = 5
+        request.timeoutInterval = timeout
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = body
+        }
         let (data, response) = try await Self.session.data(for: request)
         guard let status = (response as? HTTPURLResponse)?.statusCode else {
             throw BridgeError.invalidResponse

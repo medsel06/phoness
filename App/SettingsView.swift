@@ -217,9 +217,10 @@ struct ControlView: View {
                     Button("Turn On") { control.start() }
                         .disabled(!ready)
                 case .starting:
-                    Button("Cancel", role: .cancel) { control.stop() }
+                    // elle kapatınca köprü bekçisi Runner'ı yeniden açmasın
+                    Button("Cancel", role: .cancel) { Task { await BridgeKeeper.shared.end() }; control.stop() }
                 case .on:
-                    Button("Turn Off", role: .destructive) { control.stop() }
+                    Button("Turn Off", role: .destructive) { Task { await BridgeKeeper.shared.end() }; control.stop() }
                 }
             } footer: {
                 Text("Starts a UI test runner on this \(Device.name) through a local VPN, so the agent can see the screen and tap anywhere. iOS asks for your passcode each time it starts.")

@@ -53,7 +53,7 @@ final class Phone {
     }
 
     var stopped = false
-    private let statusBridge = StatusBridge()
+    private lazy var statusBridge = StatusBridge(phone: self)
     private var current: String?
     private var known: [String] = []
     // most recent first, so the slow scan usually hits early
