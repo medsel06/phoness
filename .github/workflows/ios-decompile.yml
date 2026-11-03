@@ -1,0 +1,73 @@
+name: ios-decompile
+# iOS 27 GenerativeAgents (MCP) cercevesini bulut macOS'ta ayiklayip sembol/sinif dokumu cikarir.
+# Salt okuma/analiz; kullanici cihazina indirme YOK (firmware bulutta iner). ipsw = blacktop/ipsw.
+on:
+  workflow_dispatch:
+    inputs:
+      cihaz:
+        description: "cihaz (iPhone17,5 = iPhone 16e)"
+        default: "iPhone17,5"
+      surum:
+        description: "iOS surumu"
+        default: "27.0"
+      cerceve:
+        description: "ayiklanacak cerceve adi"
+        default: "GenerativeAgents"
+jobs:
+  decompile:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: ipsw kur
+        run: |
+          brew install blacktop/tap/ipsw
+          ipsw version
+      - name: Firmware indir + shared cache ayikla
+        run: |
+          set -x
+          ipsw download ipsw --device "${{ inputs.cihaz }}" --version "${{ inputs.surum }}" --dyld --confirm
+          echo "=== inen dosyalar ==="
+          ls -la
+          find . -maxdepth 3 -iname "dyld_shared_cache*" | tee caches.txt
+      - name: Cerceveyi ayikla
+        run: |
+          set -x
+          CACHE=$(find . -iname "dyld_shared_cache_arm64e" | head -1)
+          [ -z "$CACHE" ] && CACHE=$(find . -iname "dyld_shared_cache_arm64*" | grep -v '\.' | head -1)
+          echo "cache: $CACHE"
+          mkdir -p out
+          ipsw dyld extract "$CACHE" "${{ inputs.cerceve }}" --output out || \
+          ipsw dyld extract "$CACHE" "/System/Library/PrivateFrameworks/${{ inputs.cerceve }}.framework/${{ inputs.cerceve }}" --output out
+          echo "=== cikan ==="
+          find out -type f | tee extracted.txt
+          DYLIB=$(find out -type f -name "${{ inputs.cerceve }}" | head -1)
+          echo "DYLIB=$DYLIB" >> $GITHUB_ENV
+      - name: Macho bilgi + semboller + sinif dokumu
+        run: |
+          set -x
+          D="$DYLIB"
+          echo "### macho info" > analiz.txt
+          ipsw macho info "$D" 2>&1 | head -120 >> analiz.txt || true
+          echo "### mangled swift semboller (demangle)" >> analiz.txt
+          nm -gU "$D" 2>/dev/null | awk '{print $NF}' | grep '^_\$s' | head -4000 > mangled.txt || true
+          xcrun swift-demangle < mangled.txt 2>/dev/null | sort -u > demangled.txt || true
+          wc -l mangled.txt demangled.txt >> analiz.txt
+          echo "### MCP/tool/register/entitlement iceren cozulmus semboller" >> analiz.txt
+          grep -iE "mcp|tool|register|entitlement|transport|stdio|subprocess|session|loopagent|sequential|xpc" demangled.txt | head -400 >> analiz.txt
+          echo "### class-dump (swift+objc)" >> analiz.txt
+          ipsw class-dump "$D" 2>/dev/null > classdump.txt || ipsw macho info "$D" --objc 2>/dev/null > classdump.txt || true
+          wc -l classdump.txt >> analiz.txt
+          echo "### classdump MCP/tool satirlari" >> analiz.txt
+          grep -inE "mcp|registertool|listtools|calltool|\btool\b|transport|entitlement" classdump.txt | head -300 >> analiz.txt
+          echo "### cstring'lerde MCP/protokol izleri" >> analiz.txt
+          strings -a "$D" | grep -iE "tools/call|tools/list|jsonrpc|mcp|modelcontext|2025-[0-9]{2}-[0-9]{2}|com.apple.private" | sort -u | head -200 >> analiz.txt
+      - name: Sonuclari yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-decompile
+          path: |
+            analiz.txt
+            demangled.txt
+            classdump.txt
+            extracted.txt
+          if-no-files-found: warn
