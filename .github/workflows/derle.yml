@@ -1,0 +1,103 @@
+name: derle
+
+# phoness'i Mac olmadan, GitHub'in bulut Mac'inde IMZASIZ derler.
+# Cikti: Agent.ipa (sohbet uygulamasi) + Runner.ipa (XCTest calistirici). Imzayi Windows'ta Sideloadly atar.
+# Ucretsiz Apple hesabi: yerlesik VPN uzantisi (Tunnel) cikarilir, telefonda LocalDevVPN kullanilir.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/derle.yml"
+
+jobs:
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Xcode sec (en yeni 27, yoksa 26)
+        run: |
+          ls -d /Applications/Xcode*.app || true
+          X=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1)
+          [ -z "$X" ] && X=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -z "$X" ] && X=/Applications/Xcode.app
+          echo "secilen: $X"
+          sudo xcode-select -s "$X/Contents/Developer"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Araclar
+        run: |
+          brew install xcodegen
+          rustup --version
+          cd launcher && rustup show active-toolchain || rustup toolchain install
+
+      - name: Proje ayari (kendi kimligimiz, ucretsiz hesap)
+        run: |
+          sed -i '' 's/AGENT_BUNDLE_ID: com.jxherc.agent/AGENT_BUNDLE_ID: com.medsel06.agent/' project.yml
+          sed -i '' 's/DEVELOPMENT_TEAM: 7V8B3J5FZ5/DEVELOPMENT_TEAM: ""/' project.yml
+          python3 - <<'EOF'
+          s = open("project.yml").read()
+          eski = "    dependencies:\n      - target: Tunnel\n"
+          assert eski in s, "Tunnel bagimliligi bulunamadi"
+          open("project.yml", "w").write(s.replace(eski, ""))
+          EOF
+          grep -nE "AGENT_BUNDLE_ID|DEVELOPMENT_TEAM|target: Tunnel" project.yml || true
+
+      - name: Gelistirici disk goruntusu (varsa uygulamaya koy)
+        continue-on-error: true
+        run: |
+          sudo xcodebuild -runFirstLaunch >/dev/null 2>&1 || true
+          ddi=/Library/Developer/DeveloperDiskImages/iOS_DDI/Restore
+          if [ ! -d "$ddi" ]; then echo "DDI yok: $ddi (uygulama telefondaki takili DDI'yi kullanir)"; exit 0; fi
+          dmg=$(/usr/bin/python3 -I -c "
+          import plistlib,sys
+          m=plistlib.load(open(sys.argv[1],'rb'))
+          for b in m['BuildIdentities']:
+              p=b['Manifest'].get('PersonalizedDMG',{}).get('Info',{}).get('Path')
+              if p: print(p); break
+          " "$ddi/BuildManifest.plist")
+          dev=App/Resources/Device
+          mkdir -p $dev/DDI
+          cp "$ddi/$dmg" $dev/DDI/Image.dmg
+          cp "$ddi/Firmware/$dmg.trustcache" $dev/DDI/Image.dmg.trustcache
+          cp "$ddi/BuildManifest.plist" $dev/DDI/BuildManifest.plist
+          ls -la $dev/DDI
+
+      - name: Derle (imzasiz)
+        run: |
+          xcodegen generate
+          set -o pipefail
+          xcodebuild -project Agent.xcodeproj -scheme Agent -sdk iphoneos -configuration Debug \
+            -derivedDataPath build build-for-testing \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS= \
+            DEVELOPMENT_TEAM= 2>&1 | tee derleme.log | grep -E "error:|warning: .*deprecated|BUILD|\*\*" | tail -80
+          ls -la build/Build/Products/Debug-iphoneos
+
+      - name: IPA paketle
+        run: |
+          P=build/Build/Products/Debug-iphoneos
+          mkdir -p out
+          for app in Agent Runner-Runner; do
+            rm -rf Payload && mkdir Payload
+            cp -R "$P/$app.app" Payload/
+            rm -rf "Payload/$app.app/PlugIns/Tunnel.appex"
+            zip -qry "out/$app.ipa" Payload
+            echo "$app: $(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$P/$app.app/Info.plist")"
+            ls "Payload/$app.app/PlugIns" "Payload/$app.app/Frameworks" 2>/dev/null || true
+          done
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phoness-imzasiz
+          path: out/*.ipa
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: derleme-kaydi
+          path: derleme.log
