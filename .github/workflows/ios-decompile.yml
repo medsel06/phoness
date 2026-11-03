@@ -2,6 +2,9 @@ name: ios-decompile
 # iOS 27 GenerativeAgents (MCP) cercevesini bulut macOS'ta ayiklayip sembol/sinif dokumu cikarir.
 # Salt okuma/analiz; kullanici cihazina indirme YOK (firmware bulutta iner). ipsw = blacktop/ipsw.
 on:
+  push:
+    paths:
+      - '.github/workflows/ios-decompile.yml'
   workflow_dispatch:
     inputs:
       cihaz:
