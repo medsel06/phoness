@@ -1,8 +1,11 @@
 import Contacts
+import CoreTelephony
 import EventKit
 import Foundation
+import Network
 import Photos
 import UIKit
+import UserNotifications
 
 // Ekransız kanal: VPS'ten (kanal=agent) iş alır; Anımsatıcılar, Takvim, Kişiler ve Fotoğraflar işini Apple'ın
 // kendi altyapısıyla, hiçbir uygulamayı açmadan yapar. Agent arka planda uyanık kaldığı sürece çalışır
@@ -117,6 +120,13 @@ enum EkransizIs {
             case "kisi_ara": return (200, ["list": try kisiAra(v)])
             case "foto_liste": return (200, ["list": try fotograflar(v)])
             case "foto_getir": return (200, try await fotografGetir(v))
+            case "bildirim_kur": return (200, try await bildirimKur(v))
+            case "bildirim_liste": return (200, ["list": await bildirimler()])
+            case "bildirim_iptal": return (200, bildirimIptal(v))
+            case "cihaz_durum": return (200, await cihazDurumu())
+            case "alarm_kur": return (200, ["kimlik": try await Alarmlar.alarmKur(tarihZorunlu(v), v["baslik"] as? String ?? "Alarm")])
+            case "sayac_kur": return (200, ["kimlik": try await Alarmlar.sayacKur(saniyeZorunlu(v), v["baslik"] as? String ?? "Sayaç")])
+            case "alarm_iptal": try Alarmlar.iptal(v["kimlik"] as? String ?? ""); return (200, ["ok": true])
             default: return (400, ["error": "bilinmeyen ekransız komut \(komut)"])
             }
         } catch let sorun as Sorun {
@@ -128,19 +138,25 @@ enum EkransizIs {
 
     // MARK: izinler
 
+    // bildirim izni async okunur; son bilinen değeri burada tutup izinDurumu'nu senkron bırakıyoruz
+    nonisolated(unsafe) static var bildirimDurumu = "sorulmadı"
+
     static func izinDurumu() -> [String: Any] {
         [
             "animsatici": ek(EKEventStore.authorizationStatus(for: .reminder)),
             "takvim": ek(EKEventStore.authorizationStatus(for: .event)),
             "kisiler": kisiIzni(CNContactStore.authorizationStatus(for: .contacts)),
             "fotograf": fotoIzni(PHPhotoLibrary.authorizationStatus(for: .readWrite)),
+            "bildirim": bildirimDurumu,
+            "alarm": Alarmlar.durum(),
         ]
     }
 
     static func izinOzeti() -> String {
         let d = izinDurumu()
         return "Anımsatıcılar: \(d["animsatici"] ?? "")\nTakvim: \(d["takvim"] ?? "")\n"
-            + "Kişiler: \(d["kisiler"] ?? "")\nFotoğraflar: \(d["fotograf"] ?? "")"
+            + "Kişiler: \(d["kisiler"] ?? "")\nFotoğraflar: \(d["fotograf"] ?? "")\n"
+            + "Bildirim: \(d["bildirim"] ?? "")\nAlarm: \(d["alarm"] ?? "")"
     }
 
     // iOS izin sorusunu yalnız uygulama öndeyken gösterir
@@ -149,7 +165,20 @@ enum EkransizIs {
         _ = try? await store.requestFullAccessToEvents()
         _ = try? await kisiler.requestAccess(for: .contacts)
         _ = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+        _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+        await bildirimIzniTazele()
+        await Alarmlar.yetkiIste()
         store.reset()
+    }
+
+    static func bildirimIzniTazele() async {
+        let s = await UNUserNotificationCenter.current().notificationSettings()
+        switch s.authorizationStatus {
+        case .authorized, .provisional, .ephemeral: bildirimDurumu = "tam"
+        case .denied: bildirimDurumu = "reddedildi"
+        case .notDetermined: bildirimDurumu = "sorulmadı"
+        @unknown default: bildirimDurumu = "bilinmiyor"
+        }
     }
 
     private static func ek(_ s: EKAuthorizationStatus) -> String {
@@ -421,5 +450,162 @@ enum EkransizIs {
             "image": jpeg.base64EncodedString(), "tarih": a.creationDate.map { iso($0) } ?? "",
             "genislik": Int(hedef.width), "yukseklik": Int(hedef.height),
         ]
+    }
+
+    // MARK: alarm/sayaç girdi yardımcıları
+
+    static func tarihZorunlu(_ v: [String: Any]) throws -> Date {
+        guard let d = isoOku(v["zaman"] as? String ?? "") else { throw Sorun(mesaj: "geçerli zaman ver (ISO)") }
+        guard d > Date().addingTimeInterval(5) else { throw Sorun(mesaj: "zaman gelecekte olmalı") }
+        return d
+    }
+
+    static func saniyeZorunlu(_ v: [String: Any]) throws -> TimeInterval {
+        let sn = (v["saniye"] as? NSNumber)?.doubleValue ?? 0
+        guard sn >= 1, sn <= 86_400 else { throw Sorun(mesaj: "saniye 1-86400 arası olmalı") }
+        return sn
+    }
+
+    // MARK: Bildirim (Claude'dan uyarı — ekransız)
+
+    static func bildirimKur(_ v: [String: Any]) async throws -> [String: Any] {
+        await bildirimIzniTazele()
+        guard bildirimDurumu == "tam" else {
+            throw Sorun(kod: 403, mesaj: "Bildirim izni yok. iPhone'da Agent'ı açıp 'İzinleri ver'e basın.")
+        }
+        guard let baslik = dolu(v["baslik"]) ?? dolu(v["govde"]) else { throw Sorun(mesaj: "başlık ya da gövde ver") }
+        let govde = dolu(v["govde"]) ?? ""
+        let icerik = UNMutableNotificationContent()
+        icerik.title = baslik
+        if !govde.isEmpty { icerik.body = govde }
+        icerik.sound = .default
+
+        let trigger: UNNotificationTrigger
+        var nezaman = ""
+        if let z = dolu(v["zaman"]), let t = isoOku(z) {
+            let aralik = t.timeIntervalSinceNow
+            guard aralik > 1 else { throw Sorun(mesaj: "zaman gelecekte olmalı") }
+            let parcalar = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: t)
+            trigger = UNCalendarNotificationTrigger(dateMatching: parcalar, repeats: false)
+            nezaman = iso(t)
+        } else {
+            let sn = (v["saniye"] as? NSNumber)?.doubleValue ?? 0
+            guard sn >= 1 else { throw Sorun(mesaj: "zaman ya da saniye ver") }
+            trigger = UNTimeIntervalNotificationTrigger(timeInterval: sn, repeats: false)
+            nezaman = iso(Date().addingTimeInterval(sn))
+        }
+        let id = UUID().uuidString
+        try await UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: id, content: icerik, trigger: trigger)
+        )
+        return ["kimlik": id, "baslik": baslik, "zaman": nezaman]
+    }
+
+    static func bildirimler() async -> [[String: Any]] {
+        let bekleyen = await UNUserNotificationCenter.current().pendingNotificationRequests()
+        return bekleyen.compactMap { r in
+            var zaman = ""
+            if let t = r.trigger as? UNCalendarNotificationTrigger, let d = t.nextTriggerDate() {
+                zaman = iso(d)
+            } else if let t = r.trigger as? UNTimeIntervalNotificationTrigger, let d = t.nextTriggerDate() {
+                zaman = iso(d)
+            }
+            return ["kimlik": r.identifier, "baslik": r.content.title, "govde": r.content.body, "zaman": zaman]
+        }
+    }
+
+    static func bildirimIptal(_ v: [String: Any]) -> [String: Any] {
+        guard let id = dolu(v["kimlik"]) else {
+            UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+            return ["ok": true, "hepsi": true]
+        }
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
+        return ["ok": true]
+    }
+
+    // MARK: Telefon durumu (okuma)
+
+    static func cihazDurumu() async -> [String: Any] {
+        let (seviye, pilDurum): (Float, String) = await MainActor.run {
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            let d: String
+            switch UIDevice.current.batteryState {
+            case .charging: d = "şarj oluyor"
+            case .full: d = "dolu"
+            case .unplugged: d = "prizde değil"
+            default: d = "bilinmiyor"
+            }
+            return (UIDevice.current.batteryLevel, d)
+        }
+        var sonuc: [String: Any] = [
+            "pil_yuzde": seviye < 0 ? -1 : Int((seviye * 100).rounded()),
+            "pil_durum": pilDurum,
+            "dusuk_guc": ProcessInfo.processInfo.isLowPowerModeEnabled,
+            "sicaklik": sicaklik(ProcessInfo.processInfo.thermalState),
+        ]
+        // depolama
+        if let vals = try? URL(fileURLWithPath: NSHomeDirectory())
+            .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey, .volumeTotalCapacityKey]) {
+            if let bos = vals.volumeAvailableCapacityForImportantUsage { sonuc["bos_depolama_gb"] = gb(bos) }
+            if let toplam = vals.volumeTotalCapacity { sonuc["toplam_depolama_gb"] = gb(Int64(toplam)) }
+        }
+        // ağ
+        let ag = await aginDurumu()
+        sonuc["ag"] = ag.0
+        sonuc["wifi"] = ag.1
+        // hücresel / uçak modu çıkarımı
+        let tasiyici = CTTelephonyNetworkInfo().serviceCurrentRadioAccessTechnology?.values.first
+        sonuc["hucresel_teknoloji"] = tasiyici.map { $0.replacingOccurrences(of: "CTRadioAccessTechnology", with: "") } ?? "yok"
+        if ag.0 == "yok" {
+            sonuc["ucak_modu"] = "muhtemelen açık (ağ yok; iOS uçak modunu doğrudan bildirmez)"
+        }
+        return sonuc
+    }
+
+    private static func gb(_ bayt: Int64) -> Double {
+        (Double(bayt) / 1_000_000_000 * 10).rounded() / 10
+    }
+
+    private static func sicaklik(_ s: ProcessInfo.ThermalState) -> String {
+        switch s {
+        case .nominal: return "normal"
+        case .fair: return "ılık"
+        case .serious: return "sıcak"
+        case .critical: return "kritik"
+        @unknown default: return "bilinmiyor"
+        }
+    }
+
+    private static func aginDurumu() async -> (String, Bool) {
+        await withCheckedContinuation { devam in
+            let monitor = NWPathMonitor()
+            let kuyruk = DispatchQueue(label: "ag-durum")
+            let bitti = NSLock()
+            var verildi = false
+            func tamamla(_ sonuc: (String, Bool)) {
+                bitti.lock(); defer { bitti.unlock() }
+                guard !verildi else { return }
+                verildi = true
+                monitor.cancel()
+                devam.resume(returning: sonuc)
+            }
+            monitor.pathUpdateHandler = { path in
+                let tur: String
+                if path.status != .satisfied {
+                    tur = "yok"
+                } else if path.usesInterfaceType(.wifi) {
+                    tur = "Wi-Fi"
+                } else if path.usesInterfaceType(.cellular) {
+                    tur = "hücresel"
+                } else if path.usesInterfaceType(.wiredEthernet) {
+                    tur = "kablolu"
+                } else {
+                    tur = "bağlı"
+                }
+                tamamla((tur, path.usesInterfaceType(.wifi)))
+            }
+            monitor.start(queue: kuyruk)
+            kuyruk.asyncAfter(deadline: .now() + 2) { tamamla(("yok", false)) }
+        }
     }
 }

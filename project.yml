@@ -54,6 +54,7 @@ targets:
           NSAllowsLocalNetworking: true
         NSLocalNetworkUsageDescription: Talks to the UI test runner and the phone's own services through the loopback VPN.
         NSRemindersFullAccessUsageDescription: "Claude'un isteğinizle hatırlatma listelemesi ve eklemesi için."
+        NSAlarmKitUsageDescription: "Claude'un isteğinizle alarm ve sayaç kurması için."
         NSCalendarsFullAccessUsageDescription: "Claude'un isteğinizle takvim etkinliklerini okuması ve eklemesi için."
         NSContactsUsageDescription: "Claude'un isteğinizle kişi ve numara araması için (yalnız okuma)."
         NSPhotoLibraryUsageDescription: "Claude'un isteğinizle son fotoğraflarınıza bakması için (yalnız okuma)."

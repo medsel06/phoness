@@ -33,6 +33,8 @@
 	<array>
 		<string>_remotepairing._tcp</string>
 	</array>
+	<key>NSAlarmKitUsageDescription</key>
+	<string>Claude'un isteğinizle alarm ve sayaç kurması için.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>
 	<string>Claude&apos;un isteğinizle hatırlatma listelemesi ve eklemesi için.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
