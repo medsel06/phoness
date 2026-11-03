@@ -33,6 +33,14 @@
 	<array>
 		<string>_remotepairing._tcp</string>
 	</array>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Claude&apos;un isteğinizle hatırlatma listelemesi ve eklemesi için.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Claude&apos;un isteğinizle takvim etkinliklerini okuması ve eklemesi için.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Claude&apos;un isteğinizle kişi ve numara araması için (yalnız okuma).</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Claude&apos;un isteğinizle son fotoğraflarınıza bakması için (yalnız okuma).</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Talks to the UI test runner and the phone's own services through the loopback VPN.</string>
 	<key>UIBackgroundModes</key>

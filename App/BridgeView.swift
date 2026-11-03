@@ -10,6 +10,8 @@ struct BridgeView: View {
     @State private var note = ""
     @State private var busy = false
     @State private var error: String?
+    @State private var izinler = EkransizIs.izinOzeti()
+    @State private var ekransiz = "stopped"
 
     private var message: String {
         if let error { return error }
@@ -45,6 +47,16 @@ struct BridgeView: View {
                     .disabled(busy)
                     Text(message)
                 }
+                Section("Ekransız erişim (uygulama açmadan)") {
+                    Text(izinler)
+                    Text("Kanal: \(ekransiz == "connected" ? "bağlı" : ekransiz == "stopped" ? "kapalı" : "bağlanıyor…")")
+                    Button("İzinleri ver") {
+                        Task {
+                            await EkransizIs.izinleriIste()
+                            izinler = EkransizIs.izinOzeti()
+                        }
+                    }
+                }
                 Text("Köprü siz durdurana kadar açık kalır. Arka planda sessiz ses çalarak uyanık durur; koparsa kendini yeniden kurar.")
             }
             .navigationTitle("iPhone köprüsü")
@@ -59,6 +71,8 @@ struct BridgeView: View {
                             state = current?["state"] as? String ?? "stopped"
                             wanted = BridgeKeeper.wanted
                             note = BridgeKeeper.shared.note
+                            ekransiz = Ekransiz.shared.state
+                            izinler = EkransizIs.izinOzeti()
                         }
                     }
                     try? await Task.sleep(for: .seconds(2))
@@ -105,6 +119,9 @@ struct BridgeView: View {
         wanted = true
         note = await BridgeKeeper.shared.startBridge() ?? ""
         BridgeKeeper.shared.keep()
+        // ekransız araçların izinleri: soru yalnız uygulama öndeyken çıkar, ilk başlatmada sor
+        await EkransizIs.izinleriIste()
+        izinler = EkransizIs.izinOzeti()
     }
 
     private func stop() async {

@@ -49,6 +49,7 @@ final class BridgeKeeper {
         guard Self.wanted else { return }
         audioOn = true
         playSilence()
+        Ekransiz.shared.start()
         nudged = true
         guard task == nil else { return }
         task = Task { await loop() }
@@ -60,6 +61,7 @@ final class BridgeKeeper {
         task?.cancel()
         task = nil
         note = ""
+        Ekransiz.shared.stop()
         stopSilence()
         _ = try? await Runner.call("/bridge/stop", body: [:], timeout: 3)
     }
@@ -85,6 +87,8 @@ final class BridgeKeeper {
         var failures = 0
         var nextRestart = Date.distantPast
         while !Task.isCancelled, Self.wanted {
+            // ekransız kanal düştüyse (ör. yetki hatası sonrası kod yenilendi) yeniden başlat; çalışıyorsa bir şey yapmaz
+            Ekransiz.shared.start()
             if nudged {
                 // kullanıcı uygulamayı açtı: beklemeyi bırak, hemen dene
                 nudged = false

@@ -84,7 +84,7 @@ final class StatusBridge {
         guard answerStatus == 204 || answerStatus == 409 else { throw BridgeError.invalidResponse }
     }
 
-    // VPS'in komutunu Runner'ın yerel uç noktasına çevirir. yalnız bu dört komut var
+    // VPS'in komutunu Runner'ın yerel uç noktasına çevirir. yalnız bu beş komut var
     private func run(_ komut: String, _ veri: [String: Any]) -> Server.Response {
         var req = Server.Request()
         switch komut {
@@ -100,6 +100,10 @@ final class StatusBridge {
         case "uygulamalar":
             req.method = "GET"
             req.path = "/apps"
+        case "sistem_ara":
+            req.method = "POST"
+            req.path = "/sistem"
+            req.body = (try? JSONSerialization.data(withJSONObject: veri)) ?? Data("{}".utf8)
         default:
             return .json(["error": "unknown bridge command \(komut)"], status: 400)
         }

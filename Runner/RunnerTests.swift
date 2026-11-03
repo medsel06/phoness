@@ -195,6 +195,8 @@ final class Phone {
         case ("POST", "/known"):
             if let ids = req.json["apps"] as? [String] { known = ids }
             return .json(["ok": true])
+        case ("POST", "/sistem"):
+            return .json(SistemAra.calistir(req.json))
         case ("GET", "/bridge/status"):
             return .json(["state": statusBridge.state])
         case ("POST", "/bridge/start"):
@@ -460,6 +462,12 @@ final class Phone {
             current = nil
         case "wait":
             RunLoop.current.run(until: Date().addingTimeInterval(seconds(1)))
+        case "siri":
+            // Siri'ye yazılı komut: çoğu iş uygulamayı öne açmadan yapılır, yalnız Siri penceresi görünür
+            guard !text.isEmpty, text.count <= 300 else { return bad("siri needs text, up to 300 characters") }
+            XCUIDevice.shared.siriService.activate(voiceRecognitionText: text)
+            RunLoop.current.run(until: Date().addingTimeInterval(seconds(4)))
+            current = nil
         default:
             return bad("unknown action \(action)")
         }
