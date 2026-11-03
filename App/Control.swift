@@ -4,11 +4,33 @@ import NetworkExtension
 import Observation
 import Launcher
 
+// app ids as installed. sideloading with a free apple account (Sideloadly, AltStore...) usually appends the
+// team id to every bundle id: com.medsel06.agent -> com.medsel06.agent.NX5562CYLD and
+// com.medsel06.agent.runner.xctrunner -> com.medsel06.agent.runner.xctrunner.NX5562CYLD.
+// ids derived from Bundle.main.bundleIdentifier have to put that suffix back at the end.
+enum AppID {
+    static let full = Bundle.main.bundleIdentifier ?? "com.jxherc.agent"
+    // ".TEAMID" when the last component looks like a team id (10 chars, A-Z and 0-9), else ""
+    static let suffix: String = {
+        guard let last = full.split(separator: ".").last, last.count == 10,
+              last.allSatisfy({ ("A"..."Z").contains($0) || ("0"..."9").contains($0) }) else { return "" }
+        return "." + last
+    }()
+    static let base = suffix.isEmpty ? full : String(full.dropLast(suffix.count))
+    // BGTaskSchedulerPermittedIdentifiers is written at build time ($(PRODUCT_BUNDLE_IDENTIFIER).run.*),
+    // so take the prefix from Info.plist instead of the (possibly re-signed) bundle id
+    static let bgPrefix: String = {
+        let permitted = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String]
+        if let p = permitted?.first(where: { $0.hasSuffix(".run.*") }) { return String(p.dropLast()) }
+        return base + ".run."
+    }()
+}
+
 // the runner is the ui test bundle (Runner target). it serves http on the phone's loopback.
 enum Runner {
     static let port: UInt16 = 8123
     // project.yml names the runner <app id>.runner, xcode adds .xctrunner
-    static let bundle = (Bundle.main.bundleIdentifier ?? "com.jxherc.agent") + ".runner.xctrunner"
+    static let bundle = AppID.base + ".runner.xctrunner" + AppID.suffix
 
     struct Failure: LocalizedError {
         var status: Int
