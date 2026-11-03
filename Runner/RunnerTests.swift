@@ -53,6 +53,7 @@ final class Phone {
     }
 
     var stopped = false
+    private let statusBridge = StatusBridge()
     private var current: String?
     private var known: [String] = []
     // most recent first, so the slow scan usually hits early
@@ -194,7 +195,20 @@ final class Phone {
         case ("POST", "/known"):
             if let ids = req.json["apps"] as? [String] { known = ids }
             return .json(["ok": true])
+        case ("GET", "/bridge/status"):
+            return .json(["state": statusBridge.state])
+        case ("POST", "/bridge/start"):
+            let config = req.json
+            guard let address = config["address"] as? String, let key = config["key"] as? String,
+                  statusBridge.start(address: address, key: key) else {
+                return .json(["error": "invalid bridge configuration"], status: 400)
+            }
+            return .json(["state": statusBridge.state])
+        case ("POST", "/bridge/stop"):
+            statusBridge.stop()
+            return .json(["state": statusBridge.state])
         case ("POST", "/stop"):
+            statusBridge.stop()
             stopped = true
             return .json(["ok": true])
         default:
