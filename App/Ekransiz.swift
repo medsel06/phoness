@@ -437,21 +437,36 @@ enum EkransizIs {
     }
 
     // Barkod/QR: telefon fotoğrafı Vision ile tarar, yalnız çözülen kodları METİN döner (resim yollamaz).
+    // yazi=true: etiketteki yazıyı da OCR ile okur (ürün adı için) — daha yavaştır, parça küçük tutulmalı.
     static func barkodTara(_ v: [String: Any]) async throws -> [String: Any] {
         try fotoIzniVar()
+        let yazi = v["yazi"] as? Bool ?? false
         let assets = fotoAssetleri(v, enfazla: 300)
         var bulunanlar: [[String: Any]] = []
         for a in assets {
             guard let cg = await cgGoruntu(a) else { continue }
             let kodlar = barkodCoz(cg)
             if kodlar.isEmpty { continue }
-            bulunanlar.append([
+            var kayit: [String: Any] = [
                 "kimlik": a.localIdentifier,
                 "tarih": a.creationDate.map { iso($0) } ?? "",
                 "barkodlar": kodlar,
-            ])
+            ]
+            if yazi { kayit["yazi"] = yaziCoz(cg) }
+            bulunanlar.append(kayit)
         }
         return ["list": bulunanlar, "taranan": assets.count, "bulunan": bulunanlar.count]
+    }
+
+    // Etiket yazısını cihazda OCR ile okur (satır satır).
+    private static func yaziCoz(_ cg: CGImage) -> [String] {
+        let istek = VNRecognizeTextRequest()
+        istek.recognitionLevel = .accurate
+        istek.usesLanguageCorrection = false
+        istek.recognitionLanguages = ["tr-TR", "en-US"]
+        let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+        guard (try? handler.perform([istek])) != nil else { return [] }
+        return (istek.results ?? []).compactMap { $0.topCandidates(1).first?.string }
     }
 
     private static func cgGoruntu(_ a: PHAsset) async -> CGImage? {
