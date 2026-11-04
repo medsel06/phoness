@@ -6,6 +6,7 @@ import Network
 import Photos
 import UIKit
 import UserNotifications
+import Vision
 
 // Ekransız kanal: VPS'ten (kanal=agent) iş alır; Anımsatıcılar, Takvim, Kişiler ve Fotoğraflar işini Apple'ın
 // kendi altyapısıyla, hiçbir uygulamayı açmadan yapar. Agent arka planda uyanık kaldığı sürece çalışır
@@ -120,6 +121,7 @@ enum EkransizIs {
             case "kisi_ara": return (200, ["list": try kisiAra(v)])
             case "foto_liste": return (200, ["list": try fotograflar(v)])
             case "foto_getir": return (200, try await fotografGetir(v))
+            case "barkod_tara": return (200, try await barkodTara(v))
             case "bildirim_kur": return (200, try await bildirimKur(v))
             case "bildirim_liste": return (200, ["list": await bildirimler()])
             case "bildirim_iptal": return (200, bildirimIptal(v))
@@ -399,29 +401,85 @@ enum EkransizIs {
         try gerek(izin == .authorized || izin == .limited, "Fotoğraflar")
     }
 
-    static func fotograflar(_ v: [String: Any]) throws -> [[String: Any]] {
-        try fotoIzniVar()
-        let adet = min(max(v["adet"] as? Int ?? 10, 1), 50)
+    // Ortak seçim: en yeniden eskiye, 'gun' içinde, 'atla' kadar atlayıp 'adet' kadar fotoğraf.
+    private static func fotoAssetleri(_ v: [String: Any], enfazla: Int) -> [PHAsset] {
+        let adet = min(max(v["adet"] as? Int ?? 10, 1), enfazla)
+        let atla = max(v["atla"] as? Int ?? 0, 0)
         let ekranHaric = v["ekran_haric"] as? Bool ?? false
         let secenek = PHFetchOptions()
         secenek.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        secenek.fetchLimit = ekranHaric ? adet * 4 : adet
+        secenek.fetchLimit = ekranHaric ? (atla + adet) * 4 : atla + adet
         if let gun = v["gun"] as? Int, gun > 0 {
             secenek.predicate = NSPredicate(format: "creationDate >= %@", Date().addingTimeInterval(-86_400 * Double(gun)) as NSDate)
         }
         let sonuc = PHAsset.fetchAssets(with: .image, options: secenek)
-        var out: [[String: Any]] = []
+        var secilen: [PHAsset] = []
+        var atlanan = 0
         for i in 0..<sonuc.count {
             let a = sonuc.object(at: i)
-            let ekran = a.mediaSubtypes.contains(.photoScreenshot)
-            if ekranHaric && ekran { continue }
-            out.append([
-                "kimlik": a.localIdentifier, "tarih": a.creationDate.map { iso($0) } ?? "",
-                "genislik": a.pixelWidth, "yukseklik": a.pixelHeight, "ekran": ekran,
-            ])
-            if out.count >= adet { break }
+            if ekranHaric && a.mediaSubtypes.contains(.photoScreenshot) { continue }
+            if atlanan < atla { atlanan += 1; continue }
+            secilen.append(a)
+            if secilen.count >= adet { break }
         }
-        return out
+        return secilen
+    }
+
+    static func fotograflar(_ v: [String: Any]) throws -> [[String: Any]] {
+        try fotoIzniVar()
+        return fotoAssetleri(v, enfazla: 300).map { a in
+            [
+                "kimlik": a.localIdentifier, "tarih": a.creationDate.map { iso($0) } ?? "",
+                "genislik": a.pixelWidth, "yukseklik": a.pixelHeight,
+                "ekran": a.mediaSubtypes.contains(.photoScreenshot),
+            ]
+        }
+    }
+
+    // Barkod/QR: telefon fotoğrafı Vision ile tarar, yalnız çözülen kodları METİN döner (resim yollamaz).
+    static func barkodTara(_ v: [String: Any]) async throws -> [String: Any] {
+        try fotoIzniVar()
+        let assets = fotoAssetleri(v, enfazla: 300)
+        var bulunanlar: [[String: Any]] = []
+        for a in assets {
+            guard let cg = await cgGoruntu(a) else { continue }
+            let kodlar = barkodCoz(cg)
+            if kodlar.isEmpty { continue }
+            bulunanlar.append([
+                "kimlik": a.localIdentifier,
+                "tarih": a.creationDate.map { iso($0) } ?? "",
+                "barkodlar": kodlar,
+            ])
+        }
+        return ["list": bulunanlar, "taranan": assets.count, "bulunan": bulunanlar.count]
+    }
+
+    private static func cgGoruntu(_ a: PHAsset) async -> CGImage? {
+        let hedef = CGSize(width: 2000, height: 2000)
+        let secenek = PHImageRequestOptions()
+        secenek.deliveryMode = .highQualityFormat
+        secenek.isNetworkAccessAllowed = true
+        secenek.resizeMode = .fast
+        return await withCheckedContinuation { devam in
+            var bitti = false
+            _ = PHImageManager.default().requestImage(for: a, targetSize: hedef, contentMode: .aspectFit, options: secenek) { img, _ in
+                guard !bitti else { return }
+                bitti = true
+                devam.resume(returning: img?.cgImage)
+            }
+        }
+    }
+
+    private static func barkodCoz(_ cg: CGImage) -> [[String: String]] {
+        let istek = VNDetectBarcodesRequest()
+        let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+        guard (try? handler.perform([istek])) != nil else { return [] }
+        return (istek.results ?? []).compactMap { obs in
+            guard let deger = obs.payloadStringValue, !deger.isEmpty else { return nil }
+            var tur = obs.symbology.rawValue
+            if tur.hasPrefix("VNBarcodeSymbology") { tur = String(tur.dropFirst("VNBarcodeSymbology".count)) }
+            return ["tur": tur, "deger": deger]
+        }
     }
 
     static func fotografGetir(_ v: [String: Any]) async throws -> [String: Any] {
