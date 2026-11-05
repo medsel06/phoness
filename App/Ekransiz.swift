@@ -441,12 +441,13 @@ enum EkransizIs {
     static func barkodTara(_ v: [String: Any]) async throws -> [String: Any] {
         try fotoIzniVar()
         let yazi = v["yazi"] as? Bool ?? false
+        let bosDa = v["bos_da"] as? Bool ?? false   // barkodsuz kareleri de getir (barkod ayrı karede olabilir)
         let assets = fotoAssetleri(v, enfazla: 300)
         var bulunanlar: [[String: Any]] = []
         for a in assets {
             guard let cg = await cgGoruntu(a) else { continue }
             let kodlar = barkodCoz(cg)
-            if kodlar.isEmpty { continue }
+            if kodlar.isEmpty && !(bosDa && yazi) { continue }
             var kayit: [String: Any] = [
                 "kimlik": a.localIdentifier,
                 "tarih": a.creationDate.map { iso($0) } ?? "",
